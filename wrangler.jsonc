@@ -20,5 +20,11 @@
       "tag": "v1",
       "new_sqlite_classes": ["GSCMCP"]
     }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "OAUTH_KV",
+      "id": "0e7d767089d84696964455e41fd09022"
+    }
   ]
 }

@@ -115,7 +115,10 @@ export async function getAccessToken(sa: ServiceAccount): Promise<string> {
 }
 
 export function parseServiceAccount(json: string): ServiceAccount {
-  const parsed = JSON.parse(json) as Record<string, unknown>;
+  // Strip leading BOM (U+FEFF) and surrounding whitespace — common when the JSON
+  // is uploaded via a tool that preserves a Windows file BOM.
+  const cleaned = json.replace(/^﻿/, "").trim();
+  const parsed = JSON.parse(cleaned) as Record<string, unknown>;
   if (typeof parsed.client_email !== "string" || typeof parsed.private_key !== "string") {
     throw new Error(
       "Invalid GOOGLE_SERVICE_ACCOUNT_JSON: missing client_email or private_key",

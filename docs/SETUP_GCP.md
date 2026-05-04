@@ -1,13 +1,15 @@
-# Google Cloud setup — Service Account for GSC
+# Google Cloud setup — OAuth Client for the connector
 
-This is the trickiest step of the install. ~5 minutes. You only do it once.
+This is the trickiest step of the install. Allow ~10 minutes the first time. You only do it once.
+
+You will create a Google Cloud project, enable the Search Console API, configure an OAuth consent screen, and create an OAuth Client ID. You end up with two values: a **Client ID** and a **Client Secret**, which you push as Cloudflare Worker secrets.
 
 ## 1. Create (or pick) a Google Cloud project
 
 1. Go to https://console.cloud.google.com
 2. Top bar → project dropdown → **New Project**
-3. Name it `gsc-mcp-connector` (or anything). Region: leave default. → **Create**
-4. Make sure the new project is selected in the top bar.
+3. Name it `gsc-mcp-connector` (or anything). → **Create**
+4. Make sure the new project is selected in the top bar before continuing.
 
 ## 2. Enable the Search Console API
 
@@ -15,65 +17,86 @@ This is the trickiest step of the install. ~5 minutes. You only do it once.
 2. Search `Search Console API`
 3. Click the result → **Enable**
 
-(Optional but recommended) Also enable `Google Search Console API` if it appears as a separate result. Same project.
+## 3. Configure the OAuth consent screen
 
-## 3. Create the Service Account
+> **Why this exists**: when a user grants the connector access to their GSC data, Google shows a consent screen. You configure what's displayed there.
 
-1. Left menu → **IAM & Admin** → **Service Accounts**
-2. **+ Create service account**
-   - **Name** : `gsc-mcp` (the email will be derived from this)
-   - **Description** : `Read-only access to Search Console for the MCP connector`
-   - → **Create and continue**
-3. **Grant access** : skip (no project-level roles needed). → **Continue** → **Done**
+1. Left menu → **APIs & Services** → **OAuth consent screen** (or **Audience** in the new GCP UI)
+2. **User Type** :
+   - **External** → recommended (works for any Google/Gmail account, including yours)
+   - **Internal** → only works if you have a Google Workspace organization
+3. → **Create**
+4. **App information** :
+   - **App name** : `gsc-mcp-connector`
+   - **User support email** : your email
+5. **Developer contact** : your email
+6. → **Save and continue**
+7. **Scopes** : skip — we request scopes at runtime, no need to declare them here. → **Save and continue**
+8. **Test users** : **+ Add users** → enter the **Gmail address** of every person who will use the connector (including yourself). Each user must be in this list while the app is in *Testing* mode.
+   - Up to 100 test users allowed
+   - You can add more later
+9. → **Save and continue** → **Back to dashboard**
+10. Leave the **Publishing status** on **Testing**. This is fine for personal/team use.
 
-## 4. Generate the JSON key
+> **About publishing**: as long as the app is "in Testing", only users in the *Test users* list can authenticate. To remove that limit, you'd need to submit the app for Google verification (slow process for "sensitive" scopes like `webmasters.readonly`). For 95% of personal/team use cases, *Testing* mode is the right choice.
 
-1. In the Service Accounts list, click the service account you just created
-2. Tab **Keys** → **Add key** → **Create new key**
-3. Select **JSON** → **Create**
-4. A `.json` file is downloaded. **Treat it like a password.** Anyone with this file can read your GSC.
+## 4. Create the OAuth Client ID
 
-## 5. Copy the email
+1. Left menu → **APIs & Services** → **Credentials**
+2. **+ Create credentials** → **OAuth client ID**
+3. **Application type** : **Web application**
+4. **Name** : `gsc-mcp-connector`
+5. **Authorized redirect URIs** → **+ Add URI** → paste **exactly** :
+   ```
+   https://YOUR-WORKER-URL/oauth/google/callback
+   ```
+   Replace `YOUR-WORKER-URL` with your actual deployed Worker URL (e.g. `gsc-mcp-connector.yourname.workers.dev`).
+   - **Critical** : the URL must end with `/oauth/google/callback`. Any typo or truncation = `redirect_uri_mismatch` error during login.
+6. → **Create**
 
-In the Service Account details, copy the value of **Email** (looks like `gsc-mcp@gsc-mcp-connector-12345.iam.gserviceaccount.com`). You will paste it into Search Console next.
+A modal appears with two values. **Copy them both** — you'll need them in the next step:
 
-## 6. Add the Service Account as a Search Console user
+- **Client ID** — long string ending in `.apps.googleusercontent.com`
+- **Client Secret** — shorter string starting with `GOCSPX-`
 
-For each property you want the connector to access:
+You can also download a JSON file containing both. Either way, keep these safe — they're equivalent to a password.
 
-1. Open https://search.google.com/search-console
-2. Pick the property
-3. Left menu → **Settings** → **Users and permissions**
-4. **Add user** → paste the Service Account email → **Permission: Restricted** is enough → **Add**
+## 5. Push them as Cloudflare Worker secrets
 
-## 7. Format the JSON for the Worker secret
-
-The Cloudflare secret command takes the JSON as a single line. Two ways:
-
-**Option A — terminal copy:**
 ```bash
-# macOS / Linux
-cat /path/to/key.json | tr -d '\n' | pbcopy   # macOS
-cat /path/to/key.json | tr -d '\n' | xclip    # Linux
+npx wrangler secret put GOOGLE_OAUTH_CLIENT_ID
+# paste the client_id when prompted
+
+npx wrangler secret put GOOGLE_OAUTH_CLIENT_SECRET
+# paste the client_secret when prompted
 ```
 
-**Option B — manual:** open the JSON in any editor, replace newlines with `\n` inside the `private_key` field, ensure the whole thing is on one line.
+Or via the Cloudflare dashboard (recommended for non-CLI users) :
+- **Workers & Pages** → your worker → **Settings** → **Variables and Secrets**
+- Add `GOOGLE_OAUTH_CLIENT_ID` (type **Secret**, paste value)
+- Add `GOOGLE_OAUTH_CLIENT_SECRET` (type **Secret**, paste value)
 
-Then:
+## 6. (separately) Set the connector access key
+
+The connector also requires a `MCP_BEARER_TOKEN` secret — a static string you choose. Anyone trying to use the connector must paste this string before being redirected to Google. It's the gate that prevents random people who discover your Worker URL from going through your OAuth Client.
+
 ```bash
-npx wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON
-# paste the one-line JSON when prompted
+# Generate one
+openssl rand -hex 32
+
+# Push as secret
+npx wrangler secret put MCP_BEARER_TOKEN
 ```
 
-Or via the Cloudflare dashboard (recommended for non-CLI users):
-- Workers & Pages → `gsc-mcp-connector` → Settings → Variables and Secrets
-- **Add** → name `GOOGLE_SERVICE_ACCOUNT_JSON` → type **Secret** → paste the full JSON (multi-line is fine in the dashboard) → Save.
+Save this value — you'll paste it in the connector's login UI later (and into ChatGPT/Claude as the connector's "Access key").
 
 ## Common pitfalls
 
 | Symptom | Cause | Fix |
 |---|---|---|
+| `redirect_uri_mismatch` | The URI configured in step 4 doesn't match what the Worker sends | Re-check the URI ends exactly with `/oauth/google/callback` |
+| `403 access_denied` after Google login | The Gmail you logged in with isn't in *Test users* | Step 3 step 8 → add the email |
 | `Search Console API has not been enabled` | API not enabled in this project | Step 2 |
-| `User does not have sufficient permission` | SA email not added to property | Step 6 |
-| `Invalid JWT signature` | `private_key` newlines lost during paste | Re-paste from the original JSON or use the dashboard |
-| Empty `siteEntry` array on `list_sites` | SA email not added to ANY property yet | Step 6 |
+| `redirect_uri must use HTTPS` | You used `http://localhost` | OAuth Web clients require HTTPS in redirect URIs (use the deployed Worker URL, not localhost) |
+| `invalid_grant: account not found` | The OAuth client was deleted in GCP | Re-create in step 4, push new secrets |
+| `No Google refresh token in grant. Re-authorize` | Old grant from a previous flow version | Delete the connector in ChatGPT/Claude and recreate it |

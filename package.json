@@ -1,6 +1,6 @@
 {
   "name": "gsc-mcp-connector",
-  "version": "0.1.0",
+  "version": "0.4.0",
   "description": "Self-hosted MCP connector for Google Search Console, deployable to Cloudflare Workers in 15 minutes.",
   "private": false,
   "license": "MIT",
@@ -12,8 +12,9 @@
     "cf-typegen": "wrangler types"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.4",
-    "agents": "^0.0.67",
+    "@cloudflare/workers-oauth-provider": "^0.4.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "agents": "^0.12.3",
     "zod": "^3.23.8"
   },
   "devDependencies": {
