@@ -9,7 +9,10 @@
 
 const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
-const SCOPES = ["https://www.googleapis.com/auth/webmasters.readonly"];
+const SCOPES = [
+  "https://www.googleapis.com/auth/webmasters.readonly",
+  "https://www.googleapis.com/auth/analytics.readonly",
+];
 
 export interface GoogleOAuthConfig {
   clientId: string;

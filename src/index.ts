@@ -20,6 +20,11 @@ import {
   listSites,
   querySearchAnalytics,
 } from "./gsc";
+import {
+  listGA4Properties,
+  queryGA4Report,
+  queryGA4Realtime,
+} from "./ga4";
 
 interface Env {
   // OAuth Client (operator's Google project)
@@ -258,6 +263,129 @@ export class GSCMCP extends McpAgent<Env, unknown, GrantProps> {
       async (args) => {
         const token = await this.accessToken();
         const data = await listSitemaps(token, args.siteUrl);
+        return asJsonContent(data);
+      },
+    );
+
+    // ── GA4 Tools ────────────────────────────────────────────────────────────
+
+    this.server.tool(
+      "ga4_list_properties",
+      "List all Google Analytics 4 (GA4) properties and numeric property IDs accessible to the authenticated user. Use this first to discover available propertyId values.",
+      {},
+      async () => {
+        const token = await this.accessToken();
+        const data = await listGA4Properties(token);
+        return asJsonContent(data);
+      },
+    );
+
+    this.server.tool(
+      "ga4_run_report",
+      "Query Google Analytics 4 (GA4) performance metrics (activeUsers, sessions, screenPageViews, bounceRate, conversions, totalRevenue, eventCount) grouped by dimensions (date, pagePath, sessionSourceMedium, country, deviceCategory, defaultChannelGroup).",
+      {
+        propertyId: z
+          .string()
+          .describe("GA4 property ID (e.g. '123456789' or 'properties/123456789'). Get this from ga4_list_properties."),
+        startDate: z
+          .string()
+          .describe("Start date (YYYY-MM-DD, or relative like 'today', 'yesterday', '7daysAgo', '30daysAgo')"),
+        endDate: z
+          .string()
+          .describe("End date (YYYY-MM-DD, or relative like 'today', 'yesterday')"),
+        metrics: z
+          .array(z.string())
+          .describe("Metrics to retrieve (e.g. ['activeUsers', 'sessions', 'screenPageViews', 'bounceRate', 'conversions'])"),
+        dimensions: z
+          .array(z.string())
+          .optional()
+          .describe("Dimensions to group by (e.g. ['pagePath', 'sessionSourceMedium', 'country', 'deviceCategory', 'date'])"),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(100000)
+          .optional()
+          .describe("Max rows to return (default 1000, max 100000)"),
+        offset: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe("Pagination offset (default 0)"),
+        filterDimension: z
+          .string()
+          .optional()
+          .describe("Optional dimension to filter on (e.g. 'country' or 'pagePath')"),
+        filterValue: z
+          .string()
+          .optional()
+          .describe("Optional filter string value"),
+        filterMatchType: z
+          .enum(["EXACT", "BEGINS_WITH", "ENDS_WITH", "CONTAINS", "FULL_REGEXP"])
+          .optional()
+          .describe("Filter match type (default: CONTAINS)"),
+      },
+      async (args) => {
+        const token = await this.accessToken();
+        let dimensionFilter: Record<string, unknown> | undefined;
+
+        if (args.filterDimension && args.filterValue) {
+          dimensionFilter = {
+            filter: {
+              fieldName: args.filterDimension,
+              stringFilter: {
+                matchType: args.filterMatchType ?? "CONTAINS",
+                value: args.filterValue,
+              },
+            },
+          };
+        }
+
+        const data = await queryGA4Report(token, {
+          propertyId: args.propertyId,
+          startDate: args.startDate,
+          endDate: args.endDate,
+          metrics: args.metrics,
+          dimensions: args.dimensions,
+          limit: args.limit,
+          offset: args.offset,
+          dimensionFilter,
+        });
+        return asJsonContent(data);
+      },
+    );
+
+    this.server.tool(
+      "ga4_run_realtime_report",
+      "Query real-time Google Analytics 4 (GA4) traffic and activity for the last 30 minutes.",
+      {
+        propertyId: z
+          .string()
+          .describe("GA4 property ID (e.g. '123456789'). Get this from ga4_list_properties."),
+        metrics: z
+          .array(z.string())
+          .describe("Realtime metrics (e.g. ['activeUsers', 'eventCount'])"),
+        dimensions: z
+          .array(z.string())
+          .optional()
+          .describe("Realtime dimensions (e.g. ['country', 'city', 'unifiedScreenName', 'deviceCategory'])"),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(1000)
+          .optional()
+          .describe("Max rows to return (default 100)"),
+      },
+      async (args) => {
+        const token = await this.accessToken();
+        const data = await queryGA4Realtime(token, {
+          propertyId: args.propertyId,
+          metrics: args.metrics,
+          dimensions: args.dimensions,
+          limit: args.limit,
+        });
         return asJsonContent(data);
       },
     );
@@ -539,7 +667,7 @@ const defaultHandler = {
         request: unpacked.req,
         userId: "operator",
         metadata: { provider: "google-oauth", scope: tokens.scope },
-        scope: unpacked.req.scope ?? ["gsc:read"],
+        scope: unpacked.req.scope ?? ["gsc:read", "ga4:read"],
         props,
       });
 
@@ -559,5 +687,5 @@ export default new OAuthProvider({
   authorizeEndpoint: "/authorize",
   tokenEndpoint: "/token",
   clientRegistrationEndpoint: "/register",
-  scopesSupported: ["gsc:read"],
+  scopesSupported: ["gsc:read", "ga4:read"],
 });
