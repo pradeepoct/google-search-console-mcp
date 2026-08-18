@@ -41,11 +41,20 @@ interface GrantProps {
   [key: string]: unknown;
 }
 
+function cleanSecret(val: unknown): string {
+  if (typeof val !== "string") return "";
+  return val
+    .replace(/^[\uFEFF\u200B-\u200D\uFEFF]/g, "")
+    .replace(/[\r\n]/g, "")
+    .replace(/^["']|["']$/g, "")
+    .trim();
+}
+
 function googleConfigFromEnv(env: Env, request: Request): GoogleOAuthConfig {
   const url = new URL(request.url);
   return {
-    clientId: (env.GOOGLE_OAUTH_CLIENT_ID ?? "").replace(/^﻿/, "").trim(),
-    clientSecret: (env.GOOGLE_OAUTH_CLIENT_SECRET ?? "").replace(/^﻿/, "").trim(),
+    clientId: cleanSecret(env.GOOGLE_OAUTH_CLIENT_ID),
+    clientSecret: cleanSecret(env.GOOGLE_OAUTH_CLIENT_SECRET),
     redirectUri: `${url.origin}/oauth/google/callback`,
   };
 }
@@ -93,8 +102,8 @@ export class GSCMCP extends McpAgent<Env, unknown, GrantProps> {
     }
     return getValidAccessToken(
       {
-        clientId: (this.env.GOOGLE_OAUTH_CLIENT_ID ?? "").replace(/^﻿/, "").trim(),
-        clientSecret: (this.env.GOOGLE_OAUTH_CLIENT_SECRET ?? "").replace(/^﻿/, "").trim(),
+        clientId: cleanSecret(this.env.GOOGLE_OAUTH_CLIENT_ID),
+        clientSecret: cleanSecret(this.env.GOOGLE_OAUTH_CLIENT_SECRET),
         redirectUri: "unused-during-refresh",
       },
       refreshToken,
@@ -455,9 +464,8 @@ const defaultHandler = {
         return new Response("Invalid oauth_state", { status: 400 });
       }
 
-      const expected = (env.MCP_BEARER_TOKEN ?? "").trim();
-      const provided =
-        typeof submittedKey === "string" ? submittedKey.trim() : "";
+      const expected = cleanSecret(env.MCP_BEARER_TOKEN);
+      const provided = cleanSecret(submittedKey);
 
       if (!expected || !provided || provided !== expected) {
         const html = loginPage({
