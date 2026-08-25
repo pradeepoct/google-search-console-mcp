@@ -160,12 +160,26 @@ async function googleAdsFetch<T>(
           parsed = null;
         }
 
-        const message =
-          parsed?.error?.message ||
-          parsed?.error?.details?.[0]?.errors?.[0]?.message ||
-          errorText;
+        const gadsErrors =
+          parsed?.error?.details?.flatMap((d: any) => d?.errors || []) || [];
+        const errorCodes = gadsErrors
+          .map((e: any) => JSON.stringify(e?.errorCode || e?.message || e))
+          .join("; ");
+        const firstErrorMessage =
+          gadsErrors[0]?.message || parsed?.error?.message || errorText;
 
-        throw new Error(`Google Ads API error (${res.status}) [${version}]: ${message}`);
+        let extraHint = "";
+        const allText = `${errorText} ${errorCodes}`;
+        if (allText.includes("DEVELOPER_TOKEN_NOT_APPROVED")) {
+          extraHint =
+            " (Hint: Your Developer Token is in 'Test Access' mode, which only permits querying Google Ads Test Accounts. To query live production accounts, apply for free 'Basic Access' in your Manager Account -> Tools & Settings -> API Center.)";
+        } else if (allText.includes("USER_PERMISSION_DENIED")) {
+          extraHint =
+            " (Hint: User lacks direct access to this customer ID, or this client account belongs to a Manager Account (MCC). Pass the MCC ID as 'loginCustomerId'.)";
+        }
+
+        const formattedMsg = `Google Ads API error (${res.status}) [${version}]: ${firstErrorMessage}${errorCodes ? ` [Details: ${errorCodes}]` : ""}${extraHint}`;
+        throw new Error(formattedMsg);
       }
 
       return (await res.json()) as T;
