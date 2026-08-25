@@ -25,11 +25,20 @@ import {
   queryGA4Report,
   queryGA4Realtime,
 } from "./ga4";
+import {
+  listAccessibleCustomers,
+  getKeywordHistoricalMetrics,
+  generateKeywordIdeas,
+} from "./google_ads";
 
 interface Env {
   // OAuth Client (operator's Google project)
   GOOGLE_OAUTH_CLIENT_ID: string;
   GOOGLE_OAUTH_CLIENT_SECRET: string;
+
+  // Google Ads API (operator defaults)
+  GOOGLE_ADS_DEVELOPER_TOKEN?: string;
+  GOOGLE_ADS_LOGIN_CUSTOMER_ID?: string;
 
   // Connector access gate (operator-set; users paste this in the login UI)
   MCP_BEARER_TOKEN: string;
@@ -389,6 +398,192 @@ export class GSCMCP extends McpAgent<Env, unknown, GrantProps> {
         return asJsonContent(data);
       },
     );
+
+    // ── Google Ads Keyword Planner Tools ─────────────────────────────────────
+
+    this.server.tool(
+      "google_ads_list_accessible_customers",
+      "List all Google Ads customer accounts and numeric customer IDs accessible to the authenticated user. Use this first to discover available customerId values for Keyword Planner queries.",
+      {
+        developerToken: z
+          .string()
+          .optional()
+          .describe("Google Ads developer token (optional if GOOGLE_ADS_DEVELOPER_TOKEN secret is configured)."),
+        loginCustomerId: z
+          .string()
+          .optional()
+          .describe("Manager account (MCC) customer ID if authenticating via manager (optional)."),
+      },
+      async (args) => {
+        const token = await this.accessToken();
+        const { developerToken, loginCustomerId } = this.getGoogleAdsConfig(
+          args.developerToken,
+          args.loginCustomerId,
+        );
+        const data = await listAccessibleCustomers({
+          token,
+          developerToken,
+          loginCustomerId,
+        });
+        return asJsonContent(data);
+      },
+    );
+
+    this.server.tool(
+      "google_ads_get_keyword_traffic",
+      "Check exact search traffic volume, 12-month historical breakdown, competition level, competition index (0-100), and top-of-page CPC bid estimates for a specific list of keywords using Google Ads Keyword Planner.",
+      {
+        customerId: z
+          .string()
+          .describe("Google Ads 10-digit customer ID (e.g. '123-456-7890' or '1234567890'). Get this from google_ads_list_accessible_customers."),
+        keywords: z
+          .array(z.string())
+          .min(1)
+          .describe("List of keywords to check traffic volume and metrics for (e.g. ['seo tools', 'keyword research', 'ai prompt engineering'])."),
+        geoTargetConstants: z
+          .array(z.string())
+          .optional()
+          .describe("Optional target locations/countries (e.g. ['US', 'IN', 'UK', 'CA', 'AU', 'DE', 'FR'] or numeric criterion IDs like ['2840']). Default is all/global."),
+        language: z
+          .string()
+          .optional()
+          .describe("Optional language filter (e.g. 'en', 'es', 'fr', 'de', 'hi' or criterion ID like '1000'). Default is all/English."),
+        keywordPlanNetwork: z
+          .enum(["GOOGLE_SEARCH", "GOOGLE_SEARCH_AND_PARTNERS"])
+          .optional()
+          .describe("Target search network (default: GOOGLE_SEARCH)."),
+        includeAdultKeywords: z
+          .boolean()
+          .optional()
+          .describe("Whether to include adult/sensitive keywords (default: false)."),
+        developerToken: z
+          .string()
+          .optional()
+          .describe("Google Ads developer token override (optional if configured in Worker secrets)."),
+        loginCustomerId: z
+          .string()
+          .optional()
+          .describe("Manager account (MCC) customer ID if accessing via manager account."),
+      },
+      async (args) => {
+        const token = await this.accessToken();
+        const { developerToken, loginCustomerId } = this.getGoogleAdsConfig(
+          args.developerToken,
+          args.loginCustomerId,
+        );
+        const data = await getKeywordHistoricalMetrics(
+          {
+            token,
+            developerToken,
+            loginCustomerId,
+          },
+          {
+            customerId: args.customerId,
+            keywords: args.keywords,
+            geoTargetConstants: args.geoTargetConstants,
+            language: args.language,
+            keywordPlanNetwork: args.keywordPlanNetwork,
+            includeAdultKeywords: args.includeAdultKeywords,
+          },
+        );
+        return asJsonContent(data);
+      },
+    );
+
+    this.server.tool(
+      "google_ads_generate_keyword_ideas",
+      "Generate new keyword ideas and search volume traffic metrics (monthly searches, competition, estimated top-of-page CPC bid ranges) from seed keywords and/or a website URL.",
+      {
+        customerId: z
+          .string()
+          .describe("Google Ads 10-digit customer ID (e.g. '1234567890'). Get this from google_ads_list_accessible_customers."),
+        keywords: z
+          .array(z.string())
+          .optional()
+          .describe("Seed keywords to generate ideas and traffic estimates from (e.g. ['marketing automation', 'crm'])."),
+        url: z
+          .string()
+          .optional()
+          .describe("Seed webpage URL to extract keywords and traffic estimates from."),
+        site: z
+          .string()
+          .optional()
+          .describe("Seed domain name for domain-level keyword ideas."),
+        geoTargetConstants: z
+          .array(z.string())
+          .optional()
+          .describe("Optional target locations/countries (e.g. ['US', 'IN', 'UK', 'CA', 'AU'] or numeric IDs)."),
+        language: z
+          .string()
+          .optional()
+          .describe("Optional language filter (e.g. 'en', 'es', 'fr', 'hi')."),
+        keywordPlanNetwork: z
+          .enum(["GOOGLE_SEARCH", "GOOGLE_SEARCH_AND_PARTNERS"])
+          .optional()
+          .describe("Target search network (default: GOOGLE_SEARCH)."),
+        includeAdultKeywords: z
+          .boolean()
+          .optional()
+          .describe("Whether to include adult keywords (default: false)."),
+        pageSize: z
+          .number()
+          .int()
+          .min(1)
+          .max(1000)
+          .optional()
+          .describe("Number of keyword ideas to return (default 50, max 1000)."),
+        pageToken: z
+          .string()
+          .optional()
+          .describe("Pagination token for fetching the next page of ideas."),
+        developerToken: z
+          .string()
+          .optional()
+          .describe("Google Ads developer token override (optional if configured in Worker secrets)."),
+        loginCustomerId: z
+          .string()
+          .optional()
+          .describe("Manager account (MCC) customer ID if accessing via manager account."),
+      },
+      async (args) => {
+        const token = await this.accessToken();
+        const { developerToken, loginCustomerId } = this.getGoogleAdsConfig(
+          args.developerToken,
+          args.loginCustomerId,
+        );
+        const data = await generateKeywordIdeas(
+          {
+            token,
+            developerToken,
+            loginCustomerId,
+          },
+          {
+            customerId: args.customerId,
+            keywords: args.keywords,
+            url: args.url,
+            site: args.site,
+            geoTargetConstants: args.geoTargetConstants,
+            language: args.language,
+            keywordPlanNetwork: args.keywordPlanNetwork,
+            includeAdultKeywords: args.includeAdultKeywords,
+            pageSize: args.pageSize,
+            pageToken: args.pageToken,
+          },
+        );
+        return asJsonContent(data);
+      },
+    );
+  }
+
+  private getGoogleAdsConfig(developerTokenArg?: string, loginCustomerIdArg?: string) {
+    const developerToken = cleanSecret(
+      developerTokenArg || this.env.GOOGLE_ADS_DEVELOPER_TOKEN,
+    );
+    const loginCustomerId =
+      cleanSecret(
+        loginCustomerIdArg || this.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID,
+      ) || undefined;
+    return { developerToken, loginCustomerId };
   }
 }
 
@@ -483,7 +678,7 @@ function loginPage(opts: {
 </head>
 <body>
 <h1>Authorize MCP client</h1>
-<p class="sub">A client wants to use this connector to query your Google Search Console data.</p>
+<p class="sub">A client wants to use this connector to query your Google Search Console, Analytics, and Google Ads data.</p>
 
 <div class="client">
   <b>${escapeHtml(opts.clientName || "Unknown client")}</b>
@@ -503,7 +698,7 @@ ${errorBlock}
 
 <ol class="steps">
   <li>Paste the access key set at deploy time (<code>MCP_BEARER_TOKEN</code>).</li>
-  <li>You will be redirected to Google to grant <code>webmasters.readonly</code> access.</li>
+  <li>You will be redirected to Google to grant access.</li>
   <li>After granting, you return to ${escapeHtml(opts.clientName || "the client")} authorized.</li>
 </ol>
 </body>
@@ -667,7 +862,7 @@ const defaultHandler = {
         request: unpacked.req,
         userId: "operator",
         metadata: { provider: "google-oauth", scope: tokens.scope },
-        scope: unpacked.req.scope ?? ["gsc:read", "ga4:read"],
+        scope: unpacked.req.scope ?? ["gsc:read", "ga4:read", "googleads:read"],
         props,
       });
 
@@ -687,5 +882,5 @@ export default new OAuthProvider({
   authorizeEndpoint: "/authorize",
   tokenEndpoint: "/token",
   clientRegistrationEndpoint: "/register",
-  scopesSupported: ["gsc:read", "ga4:read"],
+  scopesSupported: ["gsc:read", "ga4:read", "googleads:read"],
 });

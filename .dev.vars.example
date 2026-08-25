@@ -8,6 +8,11 @@
 GOOGLE_OAUTH_CLIENT_ID=your-client-id.apps.googleusercontent.com
 GOOGLE_OAUTH_CLIENT_SECRET=GOCSPX-your-client-secret
 
+# Google Ads API (Optional: set operator default developer token and manager customer ID)
+# Obtain developer token from Google Ads Manager Account -> Tools & Settings -> API Center
+GOOGLE_ADS_DEVELOPER_TOKEN=your-google-ads-developer-token
+GOOGLE_ADS_LOGIN_CUSTOMER_ID=1234567890
+
 # Random opaque string used as a connector access gate.
 # Generate with: openssl rand -hex 32
 MCP_BEARER_TOKEN=replace-me-with-a-long-random-secret

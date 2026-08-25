@@ -7,12 +7,23 @@
 
 ## What this gives you
 
-Once deployed, you get a private MCP endpoint that exposes 4 tools to your AI assistant:
+Once deployed, you get a private MCP endpoint that exposes 10 tools to your AI assistant across Search Console, Google Analytics 4, and Google Ads Keyword Planner:
 
+### Google Search Console (GSC)
 - `list_sites` — discover every property accessible to the authenticated user
 - `query_search_analytics` — clicks, impressions, CTR, position, filterable by query / page / country / device / search appearance / date
 - `inspect_url` — full URL Inspection API output (indexing status, canonical, mobile, AMP)
 - `list_sitemaps` — every submitted sitemap and its processing status
+
+### Google Analytics 4 (GA4)
+- `ga4_list_properties` — list all GA4 properties and IDs accessible to the user
+- `ga4_run_report` — query GA4 metrics (users, sessions, pageviews, conversions, revenue) grouped by dimensions
+- `ga4_run_realtime_report` — query real-time activity for the last 30 minutes
+
+### Google Ads Keyword Planner (Search Volume & Traffic)
+- `google_ads_list_accessible_customers` — list accessible Google Ads customer IDs
+- `google_ads_get_keyword_traffic` — check exact search volume traffic, 12-month monthly historical breakdown, competition index (0-100), and top-of-page CPC bid estimates for target keywords
+- `google_ads_generate_keyword_ideas` — generate new keyword ideas with search volume, competition, and CPC ranges from seed keywords or a website URL
 
 You ask: *"Quelles sont mes 50 requêtes avec la plus grosse perte de clics entre les 28 derniers jours et les 28 jours précédents ?"* and the assistant pulls the data, computes the delta, and writes the analysis. No more SQL exports.
 
@@ -82,6 +93,9 @@ npx wrangler secret put GOOGLE_OAUTH_CLIENT_ID
 
 npx wrangler secret put GOOGLE_OAUTH_CLIENT_SECRET
 # paste the Client Secret from step 3
+
+# Optional: Google Ads API Developer Token (for Keyword Planner traffic tools)
+npx wrangler secret put GOOGLE_ADS_DEVELOPER_TOKEN
 ```
 
 Or via the Cloudflare dashboard : **Workers & Pages** → your worker → **Settings** → **Variables and Secrets** → add each as type **Secret**.
