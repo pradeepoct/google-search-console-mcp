@@ -1,15 +1,17 @@
 /**
- * Google Ads API (v19) REST wrapper for Keyword Planner & Traffic Metrics.
- * https://developers.google.com/google-ads/api/rest/reference/rest/v19/customers/generateKeywordHistoricalMetrics
- * https://developers.google.com/google-ads/api/rest/reference/rest/v19/customers/generateKeywordIdeas
+ * Google Ads API REST wrapper for Keyword Planner & Traffic Metrics.
+ * Supports active versions (v25, v24, v23, v22) with automatic fallback.
  */
 
-const GOOGLE_ADS_API_BASE = "https://googleads.googleapis.com/v19";
+const GOOGLE_ADS_HOST = "https://googleads.googleapis.com";
+export const SUPPORTED_VERSIONS = ["v25", "v24", "v23", "v22"];
+export const DEFAULT_VERSION = "v25";
 
 export interface GoogleAdsApiOptions {
   token: string;
   developerToken: string;
   loginCustomerId?: string;
+  apiVersion?: string;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -19,6 +21,9 @@ export function cleanCustomerId(customerId: string): string {
 }
 
 const COMMON_GEO_MAP: Record<string, string> = {
+  GLOBAL: "",
+  WORLDWIDE: "",
+  ALL: "",
   US: "geoTargetConstants/2840",
   USA: "geoTargetConstants/2840",
   UNITED_STATES: "geoTargetConstants/2840",
@@ -44,6 +49,10 @@ const COMMON_GEO_MAP: Record<string, string> = {
   BRAZIL: "geoTargetConstants/2076",
   JP: "geoTargetConstants/2392",
   JAPAN: "geoTargetConstants/2392",
+  AE: "geoTargetConstants/2784",
+  UAE: "geoTargetConstants/2784",
+  SG: "geoTargetConstants/2702",
+  SINGAPORE: "geoTargetConstants/2702",
 };
 
 const COMMON_LANG_MAP: Record<string, string> = {
@@ -65,13 +74,18 @@ const COMMON_LANG_MAP: Record<string, string> = {
   chinese: "languageConstants/1017",
   hi: "languageConstants/1023",
   hindi: "languageConstants/1023",
+  ar: "languageConstants/1019",
+  arabic: "languageConstants/1019",
 };
 
-export function resolveGeoConstant(geo: string): string {
+export function resolveGeoConstant(geo: string): string | null {
   const clean = geo.trim();
+  if (!clean) return null;
   if (clean.startsWith("geoTargetConstants/")) return clean;
   const upper = clean.toUpperCase().replace(/\s+/g, "_");
-  if (COMMON_GEO_MAP[upper]) return COMMON_GEO_MAP[upper];
+  if (COMMON_GEO_MAP[upper] !== undefined) {
+    return COMMON_GEO_MAP[upper] || null;
+  }
   if (/^\d+$/.test(clean)) return `geoTargetConstants/${clean}`;
   return clean;
 }
@@ -93,9 +107,10 @@ export function microsToCurrency(micros?: string | number | null): number | unde
 }
 
 async function googleAdsFetch<T>(
-  url: string,
+  path: string,
   opts: GoogleAdsApiOptions,
   init: RequestInit = {},
+  includeLoginCustomerId = true,
 ): Promise<T> {
   const cleanDevToken = opts.developerToken.trim();
   if (!cleanDevToken) {
@@ -104,40 +119,71 @@ async function googleAdsFetch<T>(
     );
   }
 
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${opts.token}`,
-    "developer-token": cleanDevToken,
-    "Content-Type": "application/json",
-    ...(init.headers as Record<string, string> | undefined),
-  };
+  const versionsToTry = opts.apiVersion
+    ? [opts.apiVersion.startsWith("v") ? opts.apiVersion : `v${opts.apiVersion}`]
+    : SUPPORTED_VERSIONS;
 
-  if (opts.loginCustomerId) {
-    headers["login-customer-id"] = cleanCustomerId(opts.loginCustomerId);
-  }
+  let lastError: Error | null = null;
 
-  const res = await fetch(url, {
-    ...init,
-    headers,
-  });
+  for (const version of versionsToTry) {
+    const url = `${GOOGLE_ADS_HOST}/${version}${path}`;
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${opts.token}`,
+      "developer-token": cleanDevToken,
+      "Content-Type": "application/json",
+      ...(init.headers as Record<string, string> | undefined),
+    };
 
-  if (!res.ok) {
-    const errorText = await res.text();
-    let parsed: any;
-    try {
-      parsed = JSON.parse(errorText);
-    } catch {
-      parsed = null;
+    if (includeLoginCustomerId && opts.loginCustomerId) {
+      headers["login-customer-id"] = cleanCustomerId(opts.loginCustomerId);
     }
 
-    const message =
-      parsed?.error?.message ||
-      parsed?.error?.details?.[0]?.errors?.[0]?.message ||
-      errorText;
+    try {
+      const res = await fetch(url, {
+        ...init,
+        headers,
+      });
 
-    throw new Error(`Google Ads API error (${res.status}): ${message}`);
+      if (res.status === 404) {
+        const errBody = await res.text();
+        // If 404 indicates endpoint or version not found, try next version
+        lastError = new Error(`Google Ads API ${version} 404: ${errBody}`);
+        continue;
+      }
+
+      if (!res.ok) {
+        const errorText = await res.text();
+        let parsed: any;
+        try {
+          parsed = JSON.parse(errorText);
+        } catch {
+          parsed = null;
+        }
+
+        const message =
+          parsed?.error?.message ||
+          parsed?.error?.details?.[0]?.errors?.[0]?.message ||
+          errorText;
+
+        throw new Error(`Google Ads API error (${res.status}) [${version}]: ${message}`);
+      }
+
+      return (await res.json()) as T;
+    } catch (err: any) {
+      if (err?.message?.includes("404") && versionsToTry.length > 1) {
+        lastError = err;
+        continue;
+      }
+      throw err;
+    }
   }
 
-  return res.json() as Promise<T>;
+  throw (
+    lastError ||
+    new Error(
+      `Google Ads API endpoint not found across tested versions (${versionsToTry.join(", ")}).`,
+    )
+  );
 }
 
 // ── 1. List Accessible Customers ─────────────────────────────────────────────
@@ -149,10 +195,14 @@ export interface ListAccessibleCustomersResponse {
 export async function listAccessibleCustomers(
   opts: GoogleAdsApiOptions,
 ): Promise<{ customerIds: string[]; resourceNames: string[] }> {
-  const url = `${GOOGLE_ADS_API_BASE}/customers:listAccessibleCustomers`;
-  const data = await googleAdsFetch<ListAccessibleCustomersResponse>(url, opts, {
-    method: "GET",
-  });
+  const path = "/customers:listAccessibleCustomers";
+  // listAccessibleCustomers must NOT send login-customer-id
+  const data = await googleAdsFetch<ListAccessibleCustomersResponse>(
+    path,
+    opts,
+    { method: "GET" },
+    false,
+  );
 
   const resourceNames = data.resourceNames ?? [];
   const customerIds = resourceNames.map((rn) => cleanCustomerId(rn));
@@ -218,7 +268,7 @@ export async function getKeywordHistoricalMetrics(
   keywords: KeywordTrafficSummary[];
 }> {
   const customerId = cleanCustomerId(params.customerId);
-  const url = `${GOOGLE_ADS_API_BASE}/customers/${customerId}:generateKeywordHistoricalMetrics`;
+  const path = `/customers/${customerId}:generateKeywordHistoricalMetrics`;
 
   const body: Record<string, unknown> = {
     keywords: params.keywords,
@@ -230,7 +280,12 @@ export async function getKeywordHistoricalMetrics(
   };
 
   if (params.geoTargetConstants && params.geoTargetConstants.length > 0) {
-    body.geoTargetConstants = params.geoTargetConstants.map(resolveGeoConstant);
+    const geos = params.geoTargetConstants
+      .map(resolveGeoConstant)
+      .filter((g): g is string => Boolean(g));
+    if (geos.length > 0) {
+      body.geoTargetConstants = geos;
+    }
   }
 
   if (params.language) {
@@ -238,7 +293,7 @@ export async function getKeywordHistoricalMetrics(
   }
 
   const response =
-    await googleAdsFetch<GenerateKeywordHistoricalMetricsResponse>(url, opts, {
+    await googleAdsFetch<GenerateKeywordHistoricalMetricsResponse>(path, opts, {
       method: "POST",
       body: JSON.stringify(body),
     });
@@ -329,7 +384,7 @@ export async function generateKeywordIdeas(
   ideas: KeywordIdeaSummary[];
 }> {
   const customerId = cleanCustomerId(params.customerId);
-  const url = `${GOOGLE_ADS_API_BASE}/customers/${customerId}:generateKeywordIdeas`;
+  const path = `/customers/${customerId}:generateKeywordIdeas`;
 
   const body: Record<string, unknown> = {
     keywordPlanNetwork: params.keywordPlanNetwork ?? "GOOGLE_SEARCH",
@@ -373,14 +428,19 @@ export async function generateKeywordIdeas(
   }
 
   if (params.geoTargetConstants && params.geoTargetConstants.length > 0) {
-    body.geoTargetConstants = params.geoTargetConstants.map(resolveGeoConstant);
+    const geos = params.geoTargetConstants
+      .map(resolveGeoConstant)
+      .filter((g): g is string => Boolean(g));
+    if (geos.length > 0) {
+      body.geoTargetConstants = geos;
+    }
   }
 
   if (params.language) {
     body.language = resolveLanguageConstant(params.language);
   }
 
-  const response = await googleAdsFetch<GenerateKeywordIdeasResponse>(url, opts, {
+  const response = await googleAdsFetch<GenerateKeywordIdeasResponse>(path, opts, {
     method: "POST",
     body: JSON.stringify(body),
   });

@@ -39,6 +39,7 @@ interface Env {
   // Google Ads API (operator defaults)
   GOOGLE_ADS_DEVELOPER_TOKEN?: string;
   GOOGLE_ADS_LOGIN_CUSTOMER_ID?: string;
+  GOOGLE_ADS_API_VERSION?: string;
 
   // Connector access gate (operator-set; users paste this in the login UI)
   MCP_BEARER_TOKEN: string;
@@ -413,17 +414,23 @@ export class GSCMCP extends McpAgent<Env, unknown, GrantProps> {
           .string()
           .optional()
           .describe("Manager account (MCC) customer ID if authenticating via manager (optional)."),
+        apiVersion: z
+          .string()
+          .optional()
+          .describe("Google Ads API version (e.g. 'v25', 'v24'). Defaults to 'v25' with automatic multi-version fallback."),
       },
       async (args) => {
         const token = await this.accessToken();
-        const { developerToken, loginCustomerId } = this.getGoogleAdsConfig(
+        const { developerToken, loginCustomerId, apiVersion } = this.getGoogleAdsConfig(
           args.developerToken,
           args.loginCustomerId,
+          args.apiVersion,
         );
         const data = await listAccessibleCustomers({
           token,
           developerToken,
           loginCustomerId,
+          apiVersion,
         });
         return asJsonContent(data);
       },
@@ -439,7 +446,7 @@ export class GSCMCP extends McpAgent<Env, unknown, GrantProps> {
         keywords: z
           .array(z.string())
           .min(1)
-          .describe("List of keywords to check traffic volume and metrics for (e.g. ['seo tools', 'keyword research', 'ai prompt engineering'])."),
+          .describe("List of keywords to check traffic volume and metrics for (e.g. ['surprise gift service', 'gift delivery'])."),
         geoTargetConstants: z
           .array(z.string())
           .optional()
@@ -464,18 +471,24 @@ export class GSCMCP extends McpAgent<Env, unknown, GrantProps> {
           .string()
           .optional()
           .describe("Manager account (MCC) customer ID if accessing via manager account."),
+        apiVersion: z
+          .string()
+          .optional()
+          .describe("Google Ads API version (e.g. 'v25', 'v24'). Defaults to 'v25' with automatic multi-version fallback."),
       },
       async (args) => {
         const token = await this.accessToken();
-        const { developerToken, loginCustomerId } = this.getGoogleAdsConfig(
+        const { developerToken, loginCustomerId, apiVersion } = this.getGoogleAdsConfig(
           args.developerToken,
           args.loginCustomerId,
+          args.apiVersion,
         );
         const data = await getKeywordHistoricalMetrics(
           {
             token,
             developerToken,
             loginCustomerId,
+            apiVersion,
           },
           {
             customerId: args.customerId,
@@ -544,18 +557,24 @@ export class GSCMCP extends McpAgent<Env, unknown, GrantProps> {
           .string()
           .optional()
           .describe("Manager account (MCC) customer ID if accessing via manager account."),
+        apiVersion: z
+          .string()
+          .optional()
+          .describe("Google Ads API version (e.g. 'v25', 'v24'). Defaults to 'v25' with automatic multi-version fallback."),
       },
       async (args) => {
         const token = await this.accessToken();
-        const { developerToken, loginCustomerId } = this.getGoogleAdsConfig(
+        const { developerToken, loginCustomerId, apiVersion } = this.getGoogleAdsConfig(
           args.developerToken,
           args.loginCustomerId,
+          args.apiVersion,
         );
         const data = await generateKeywordIdeas(
           {
             token,
             developerToken,
             loginCustomerId,
+            apiVersion,
           },
           {
             customerId: args.customerId,
@@ -575,7 +594,11 @@ export class GSCMCP extends McpAgent<Env, unknown, GrantProps> {
     );
   }
 
-  private getGoogleAdsConfig(developerTokenArg?: string, loginCustomerIdArg?: string) {
+  private getGoogleAdsConfig(
+    developerTokenArg?: string,
+    loginCustomerIdArg?: string,
+    apiVersionArg?: string,
+  ) {
     const developerToken = cleanSecret(
       developerTokenArg || this.env.GOOGLE_ADS_DEVELOPER_TOKEN,
     );
@@ -583,7 +606,11 @@ export class GSCMCP extends McpAgent<Env, unknown, GrantProps> {
       cleanSecret(
         loginCustomerIdArg || this.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID,
       ) || undefined;
-    return { developerToken, loginCustomerId };
+    const apiVersion =
+      cleanSecret(
+        apiVersionArg || this.env.GOOGLE_ADS_API_VERSION,
+      ) || undefined;
+    return { developerToken, loginCustomerId, apiVersion };
   }
 }
 
