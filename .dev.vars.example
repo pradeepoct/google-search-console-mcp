@@ -13,6 +13,13 @@ GOOGLE_OAUTH_CLIENT_SECRET=GOCSPX-your-client-secret
 GOOGLE_ADS_DEVELOPER_TOKEN=your-google-ads-developer-token
 GOOGLE_ADS_LOGIN_CUSTOMER_ID=1234567890
 
+# SERP & Google AI Overview Checker API keys (Optional)
+# Primary: SerpApi (250 free searches/month recurring) -> https://serpapi.com
+SERPAPI_API_KEY=your-serpapi-api-key
+# Secondary Fallback: Serper.dev (2,500 free queries + $0.001/query) -> https://serper.dev
+SERPER_API_KEY=your-serper-api-key
+
 # Random opaque string used as a connector access gate.
 # Generate with: openssl rand -hex 32
 MCP_BEARER_TOKEN=replace-me-with-a-long-random-secret
+

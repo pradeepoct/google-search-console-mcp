@@ -7,13 +7,15 @@
 
 ## What this gives you
 
-Once deployed, you get a private MCP endpoint that exposes 10 tools to your AI assistant across Search Console, Google Analytics 4, and Google Ads Keyword Planner:
+Once deployed, you get a private MCP endpoint that exposes 23 tools to your AI assistant across Search Console, Google Analytics 4, Google Ads Keyword Planner, Google Autocomplete, SERP analysis, and Market Gap Intelligence:
 
-### Google Search Console (GSC)
+### Google Search Console & Opportunity Finder
 - `list_sites` — discover every property accessible to the authenticated user
 - `query_search_analytics` — clicks, impressions, CTR, position, filterable by query / page / country / device / search appearance / date
 - `inspect_url` — full URL Inspection API output (indexing status, canonical, mobile, AMP)
 - `list_sitemaps` — every submitted sitemap and its processing status
+- `gsc_find_striking_distance_keywords` — identify keywords ranking in positions 8 to 20 with high impressions to unlock immediate page 1 traffic gains
+- `gsc_find_keyword_cannibalization` — detect internal URLs competing for the same queries and get canonical/redirect fix recommendations
 
 ### Google Analytics 4 (GA4)
 - `ga4_list_properties` — list all GA4 properties and IDs accessible to the user
@@ -24,6 +26,23 @@ Once deployed, you get a private MCP endpoint that exposes 10 tools to your AI a
 - `google_ads_list_accessible_customers` — list accessible Google Ads customer IDs
 - `google_ads_get_keyword_traffic` — check exact search volume traffic, 12-month monthly historical breakdown, competition index (0-100), and top-of-page CPC bid estimates for target keywords
 - `google_ads_generate_keyword_ideas` — generate new keyword ideas with search volume, competition, and CPC ranges from seed keywords or a website URL
+
+### Google Autocomplete Engine (100% Free)
+- `google_autocomplete_expand` — discover surging zero-competition long-tail search queries via Google's real-time Suggest engine across alphabet (a-z), questions, comparisons, or commercial intent
+
+### Google SERP, AI Overview & Competition Analysis
+- `serpapi_google_search` — direct Google search via SerpApi returning top 10 organic results, page titles, URLs, domains, snippets, AI Overview, featured snippets, and knowledge graph.
+- `serperdev_google_search` — direct Google search via Serper.dev returning top 10 organic results, page titles, URLs, domains, snippets, AI Overview, featured snippets, and knowledge graph.
+- `get_serp_overview` — check whether Google provides an AI Overview (SGE), Featured Snippet, Knowledge Graph, or organic top rankings for target keywords with intelligent hybrid auto-fallback (SerpApi primary with automatic Serper.dev fallback).
+- `analyze_keyword_competition` — analyze SERP competition and ranking opportunity for a keyword. Inspects top 10 competitors, domain diversity, presence of UGC / forum discussions (Reddit, Quora), major authority domains (Wikipedia, Gov), and AI Overviews to produce an actionable ranking opportunity assessment.
+- `check_keyword_difficulty` — calculate an accurate 0–100 Keyword Difficulty (KD) score for single or batch queries. Evaluates top 10 competitor domain authorities (mega-authorities vs. niche vs. UGC/Reddit/Quora content gaps), competitor title optimization ratios, SERP feature saturation, backlink requirements, and actionable SEO recommendations.
+- `check_serp_overview` — alias for `get_serp_overview` supporting single or batch keyword lists.
+
+### Market Gap & Ranking Opportunity Intelligence
+- `find_reddit_forum_content_gaps` — scan keywords to find queries where Reddit, Quora, or discussion forums rank in the top 3–5, signaling an immediate editorial content gap
+- `get_people_also_ask_tree` — extract the complete People Also Ask (PAA) question tree with user intent classification and generate ready-to-use JSON-LD FAQPage schema
+- `detect_serp_freshness_gaps` — detect outdated search results (competitor content $\le$ 2023) to capitalize on Google's freshness ranking bonus
+- `find_high_cpc_low_kd_keywords` — the "Golden Ratio" commercial opportunity hunter: finds keywords with high advertiser CPC and search volume, but low SEO Keyword Difficulty (KD $\le$ 45)
 
 You ask: *"Quelles sont mes 50 requêtes avec la plus grosse perte de clics entre les 28 derniers jours et les 28 jours précédents ?"* and the assistant pulls the data, computes the delta, and writes the analysis. No more SQL exports.
 
@@ -96,6 +115,12 @@ npx wrangler secret put GOOGLE_OAUTH_CLIENT_SECRET
 
 # Optional: Google Ads API Developer Token (for Keyword Planner traffic tools)
 npx wrangler secret put GOOGLE_ADS_DEVELOPER_TOKEN
+
+# Optional: SERP & AI Overview Checker Keys
+# Primary (250 free/month recurring):
+npx wrangler secret put SERPAPI_API_KEY
+# Fallback (2,500 free queries + $0.001/query):
+npx wrangler secret put SERPER_API_KEY
 ```
 
 Or via the Cloudflare dashboard : **Workers & Pages** → your worker → **Settings** → **Variables and Secrets** → add each as type **Secret**.

@@ -30,6 +30,27 @@ import {
   getKeywordHistoricalMetrics,
   generateKeywordIdeas,
 } from "./google_ads";
+import {
+  checkBatchSerpOverview,
+  fetchSerpApi,
+  fetchSerperDev,
+  analyzeKeywordCompetition,
+  checkBatchKeywordDifficulty,
+  checkKeywordDifficulty,
+} from "./serp";
+import {
+  findStrikingDistanceKeywords,
+  findKeywordCannibalization,
+} from "./gsc_opportunities";
+import {
+  expandAutocomplete,
+} from "./autocomplete";
+import {
+  findRedditForumContentGaps,
+  getPeopleAlsoAskTree,
+  detectSerpFreshnessGaps,
+  findHighCpcLowKdKeywords,
+} from "./market_gaps";
 
 interface Env {
   // OAuth Client (operator's Google project)
@@ -40,6 +61,10 @@ interface Env {
   GOOGLE_ADS_DEVELOPER_TOKEN?: string;
   GOOGLE_ADS_LOGIN_CUSTOMER_ID?: string;
   GOOGLE_ADS_API_VERSION?: string;
+
+  // SERP & AI Overview API keys (optional; operator defaults)
+  SERPAPI_API_KEY?: string;
+  SERPER_API_KEY?: string;
 
   // Connector access gate (operator-set; users paste this in the login UI)
   MCP_BEARER_TOKEN: string;
@@ -592,6 +617,588 @@ export class GSCMCP extends McpAgent<Env, unknown, GrantProps> {
         return asJsonContent(data);
       },
     );
+
+    // ── SERP & AI Overview Checker Tools ────────────────────────────────────
+
+    this.server.tool(
+      "serpapi_google_search",
+      "Execute a live Google Search directly using SerpApi. Returns top 10 organic rankings with page titles, URLs, domains, snippets, AI Overview, featured snippet, and knowledge graph.",
+      {
+        query: z
+          .string()
+          .describe("The Google search query or keyword (e.g. 'best crm software')."),
+        country: z
+          .string()
+          .optional()
+          .describe("Two-letter country code (e.g. 'us', 'in', 'uk'). Default is 'us'."),
+        language: z
+          .string()
+          .optional()
+          .describe("Two-letter language code (e.g. 'en', 'es', 'fr'). Default is 'en'."),
+        serpApiKey: z
+          .string()
+          .optional()
+          .describe("Optional SerpApi key override (if not using Worker secret)."),
+      },
+      async (args) => {
+        const serpConfig = this.getSerpConfig(args.serpApiKey, undefined);
+        if (!serpConfig.serpApiKey) {
+          throw new Error("SERPAPI_API_KEY is not configured in Worker secrets or provided as an argument.");
+        }
+        const data = await fetchSerpApi(
+          args.query,
+          args.country || "us",
+          args.language || "en",
+          serpConfig.serpApiKey,
+        );
+        return asJsonContent({
+          provider: "serpapi",
+          ...data,
+        });
+      },
+    );
+
+    this.server.tool(
+      "serperdev_google_search",
+      "Execute a live Google Search directly using Serper.dev. Returns top 10 organic rankings with page titles, URLs, domains, snippets, AI Overview, featured snippet, and knowledge graph.",
+      {
+        query: z
+          .string()
+          .describe("The Google search query or keyword (e.g. 'best standing desk')."),
+        country: z
+          .string()
+          .optional()
+          .describe("Two-letter country code (e.g. 'us', 'in', 'uk'). Default is 'us'."),
+        language: z
+          .string()
+          .optional()
+          .describe("Two-letter language code (e.g. 'en', 'es', 'fr'). Default is 'en'."),
+        serperApiKey: z
+          .string()
+          .optional()
+          .describe("Optional Serper.dev key override (if not using Worker secret)."),
+      },
+      async (args) => {
+        const serpConfig = this.getSerpConfig(undefined, args.serperApiKey);
+        if (!serpConfig.serperApiKey) {
+          throw new Error("SERPER_API_KEY is not configured in Worker secrets or provided as an argument.");
+        }
+        const data = await fetchSerperDev(
+          args.query,
+          args.country || "us",
+          args.language || "en",
+          serpConfig.serperApiKey,
+        );
+        return asJsonContent({
+          provider: "serper",
+          ...data,
+        });
+      },
+    );
+
+    this.server.tool(
+      "get_serp_overview",
+      "Check whether Google displays an AI Overview (SGE), Featured Snippet, Knowledge Graph, and top organic rankings for specified keyword(s). Supports dual-engine auto-fallback (SerpApi first; automatically switches to Serper.dev if quota is reached).",
+      {
+        keyword: z
+          .string()
+          .optional()
+          .describe("Single keyword to check (e.g. 'best crm for startups')."),
+        keywords: z
+          .array(z.string())
+          .optional()
+          .describe("Array of keywords to check in batch (e.g. ['best crm for startups', 'best free crm'])."),
+        country: z
+          .string()
+          .optional()
+          .describe("Two-letter country code (e.g. 'us', 'in', 'uk'). Default is 'us'."),
+        language: z
+          .string()
+          .optional()
+          .describe("Two-letter language code (e.g. 'en', 'es', 'fr'). Default is 'en'."),
+        provider: z
+          .enum(["auto", "serpapi", "serper"])
+          .optional()
+          .describe("Search provider strategy: 'auto' (default: SerpApi with Serper.dev fallback), 'serpapi', or 'serper'."),
+        serpApiKey: z.string().optional().describe("Optional SerpApi key override."),
+        serperApiKey: z.string().optional().describe("Optional Serper.dev key override."),
+      },
+      async (args) => {
+        const serpConfig = this.getSerpConfig(args.serpApiKey, args.serperApiKey);
+        const queryList: string[] = [];
+        if (args.keyword) queryList.push(args.keyword);
+        if (args.keywords && Array.isArray(args.keywords)) {
+          for (const k of args.keywords) {
+            if (k && !queryList.includes(k)) queryList.push(k);
+          }
+        }
+        if (queryList.length === 0) {
+          throw new Error("Provide at least one keyword via 'keyword' or 'keywords'.");
+        }
+
+        const results = await checkBatchSerpOverview(
+          queryList,
+          {
+            country: args.country,
+            language: args.language,
+            provider: args.provider,
+            serpApiKey: serpConfig.serpApiKey,
+            serperApiKey: serpConfig.serperApiKey,
+          },
+          serpConfig,
+        );
+
+        return asJsonContent({
+          totalKeywords: results.length,
+          keywordsWithAiOverview: results.filter((r) => r.hasAiOverview).length,
+          keywordsWithFeaturedSnippet: results.filter((r) => r.hasFeaturedSnippet).length,
+          keywordsWithKnowledgeGraph: results.filter((r) => r.hasKnowledgeGraph).length,
+          results,
+        });
+      },
+    );
+
+    this.server.tool(
+      "analyze_keyword_competition",
+      "Analyze the SERP competition and ranking opportunity for a keyword. Inspects top 10 competitors, domain diversity, presence of forum/UGC discussions (Reddit, Quora), major authority domains (Wikipedia, Gov), and AI Overviews to produce an actionable ranking opportunity assessment.",
+      {
+        query: z
+          .string()
+          .describe("Target keyword or query to analyze (e.g. 'best ergonomic chair under 300')."),
+        country: z
+          .string()
+          .optional()
+          .describe("Two-letter country code (default 'us')."),
+        language: z
+          .string()
+          .optional()
+          .describe("Two-letter language code (default 'en')."),
+        provider: z
+          .enum(["auto", "serpapi", "serper"])
+          .optional()
+          .describe("Search provider strategy: 'auto' (default: SerpApi primary with automatic Serper.dev fallback), 'serpapi', or 'serper'."),
+        serpApiKey: z.string().optional().describe("Optional SerpApi key override."),
+        serperApiKey: z.string().optional().describe("Optional Serper.dev key override."),
+      },
+      async (args) => {
+        const serpConfig = this.getSerpConfig(args.serpApiKey, args.serperApiKey);
+        const analysis = await analyzeKeywordCompetition(
+          {
+            query: args.query,
+            country: args.country,
+            language: args.language,
+            provider: args.provider,
+            serpApiKey: serpConfig.serpApiKey,
+            serperApiKey: serpConfig.serperApiKey,
+          },
+          serpConfig,
+        );
+        return asJsonContent(analysis);
+      },
+    );
+
+    this.server.tool(
+      "check_serp_overview",
+      "Check whether Google displays an AI Overview (SGE), Featured Snippet, Knowledge Graph, and top organic search rankings for specified keyword(s). Employs hybrid auto-fallback (tries SerpApi first to use 250 monthly free searches; automatically switches to Serper.dev if SerpApi quota is reached or errors).",
+      {
+        keywords: z
+          .array(z.string())
+          .min(1)
+          .describe("List of keywords or search queries to check (e.g. ['best crm for startups', 'how to tie a tie'])."),
+        country: z
+          .string()
+          .optional()
+          .describe("Two-letter country code for geo-targeted search results (e.g. 'us', 'in', 'uk', 'ca'). Default is 'us'."),
+        language: z
+          .string()
+          .optional()
+          .describe("Two-letter language code (e.g. 'en', 'es', 'fr', 'hi'). Default is 'en'."),
+        provider: z
+          .enum(["auto", "serpapi", "serper"])
+          .optional()
+          .describe("Search provider strategy: 'auto' (default: SerpApi primary with automatic Serper.dev fallback), 'serpapi', or 'serper'."),
+        serpApiKey: z
+          .string()
+          .optional()
+          .describe("Optional SerpApi key override (if not configured in Worker secrets)."),
+        serperApiKey: z
+          .string()
+          .optional()
+          .describe("Optional Serper.dev key override (if not configured in Worker secrets)."),
+      },
+      async (args) => {
+        const serpConfig = this.getSerpConfig(args.serpApiKey, args.serperApiKey);
+        const results = await checkBatchSerpOverview(
+          args.keywords,
+          {
+            country: args.country,
+            language: args.language,
+            provider: args.provider,
+            serpApiKey: serpConfig.serpApiKey,
+            serperApiKey: serpConfig.serperApiKey,
+          },
+          serpConfig,
+        );
+
+        return asJsonContent({
+          totalKeywords: results.length,
+          keywordsWithAiOverview: results.filter((r) => r.hasAiOverview).length,
+          keywordsWithFeaturedSnippet: results.filter((r) => r.hasFeaturedSnippet).length,
+          keywordsWithKnowledgeGraph: results.filter((r) => r.hasKnowledgeGraph).length,
+          results,
+        });
+      },
+    );
+
+    this.server.tool(
+      "check_keyword_difficulty",
+      "Calculate an accurate 0–100 Keyword Difficulty (KD) score and competitive analysis for one or multiple keywords. Analyzes top 10 ranking competitors, weighted domain authorities (mega-authorities, niche sites, and UGC/Reddit/Quora signals), on-page title optimization ratios, SERP feature crowding (AI Overviews, featured snippets), and provides estimated backlink requirements and actionable ranking recommendations.",
+      {
+        keyword: z
+          .string()
+          .optional()
+          .describe("Single target keyword or query to evaluate (e.g. 'best crm for startups')."),
+        keywords: z
+          .array(z.string())
+          .optional()
+          .describe("Multiple keywords to evaluate in batch (e.g. ['best crm for startups', 'open source crm'])."),
+        country: z
+          .string()
+          .optional()
+          .describe("Two-letter country code (e.g. 'us', 'in', 'uk'). Default is 'us'."),
+        language: z
+          .string()
+          .optional()
+          .describe("Two-letter language code (e.g. 'en', 'es', 'fr'). Default is 'en'."),
+        provider: z
+          .enum(["auto", "serpapi", "serper"])
+          .optional()
+          .describe("Search provider strategy: 'auto' (default: SerpApi with automatic Serper.dev fallback), 'serpapi', or 'serper'."),
+        serpApiKey: z.string().optional().describe("Optional SerpApi key override."),
+        serperApiKey: z.string().optional().describe("Optional Serper.dev key override."),
+      },
+      async (args) => {
+        const serpConfig = this.getSerpConfig(args.serpApiKey, args.serperApiKey);
+        const queryList: string[] = [];
+        if (args.keyword) queryList.push(args.keyword);
+        if (args.keywords && Array.isArray(args.keywords)) {
+          for (const k of args.keywords) {
+            if (k && !queryList.includes(k)) queryList.push(k);
+          }
+        }
+        if (queryList.length === 0) {
+          throw new Error("Provide at least one keyword via 'keyword' or 'keywords'.");
+        }
+
+        const results = await checkBatchKeywordDifficulty(
+          queryList,
+          {
+            country: args.country,
+            language: args.language,
+            provider: args.provider,
+            serpApiKey: serpConfig.serpApiKey,
+            serperApiKey: serpConfig.serperApiKey,
+          },
+          serpConfig,
+        );
+
+        if (queryList.length === 1) {
+          return asJsonContent(results[0]);
+        }
+
+        return asJsonContent({
+          totalKeywords: results.length,
+          averageDifficultyScore: Math.round(
+            results.reduce((acc, r) => acc + r.difficultyScore, 0) / results.length,
+          ),
+          results,
+        });
+      },
+    );
+
+    // ── GSC Opportunities & Health Tools ────────────────────────────────────
+
+    this.server.tool(
+      "gsc_find_striking_distance_keywords",
+      "Find high-opportunity 'striking distance' keywords from your Google Search Console data (positions 8 to 20 with high impressions). These are keywords where you already rank on page 2 or bottom of page 1, and small on-page optimizations (title, H2 expansion, internal links) can push them into the top 3 with massive traffic gains.",
+      {
+        siteUrl: z.string().describe("The Search Console property URL (e.g. 'https://example.com/' or 'sc-domain:example.com')."),
+        startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("Start date (YYYY-MM-DD). Defaults to 28 days ago."),
+        endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("End date (YYYY-MM-DD). Defaults to 3 days ago."),
+        minPosition: z.number().optional().describe("Minimum average position (default: 8.0)."),
+        maxPosition: z.number().optional().describe("Maximum average position (default: 20.0)."),
+        minImpressions: z.number().int().optional().describe("Minimum impressions threshold (default: 100)."),
+        rowLimit: z.number().int().optional().describe("Maximum rows to fetch from GSC (default: 1000)."),
+      },
+      async (args) => {
+        const token = await this.accessToken();
+        const result = await findStrikingDistanceKeywords(token, {
+          siteUrl: args.siteUrl,
+          startDate: args.startDate,
+          endDate: args.endDate,
+          minPosition: args.minPosition,
+          maxPosition: args.maxPosition,
+          minImpressions: args.minImpressions,
+          rowLimit: args.rowLimit,
+        });
+        return asJsonContent(result);
+      },
+    );
+
+    this.server.tool(
+      "gsc_find_keyword_cannibalization",
+      "Detect keyword cannibalization across your site where multiple internal URLs are competing against each other for the exact same search query in Google Search Console. Identifies split impressions/clicks and recommends canonical, 301-redirect, or content differentiation fixes.",
+      {
+        siteUrl: z.string().describe("The Search Console property URL (e.g. 'https://example.com/' or 'sc-domain:example.com')."),
+        startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("Start date (YYYY-MM-DD). Defaults to 28 days ago."),
+        endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("End date (YYYY-MM-DD). Defaults to 3 days ago."),
+        minImpressions: z.number().int().optional().describe("Minimum total query impressions threshold (default: 50)."),
+        rowLimit: z.number().int().optional().describe("Maximum rows to fetch from GSC (default: 2500)."),
+      },
+      async (args) => {
+        const token = await this.accessToken();
+        const result = await findKeywordCannibalization(token, {
+          siteUrl: args.siteUrl,
+          startDate: args.startDate,
+          endDate: args.endDate,
+          minImpressions: args.minImpressions,
+          rowLimit: args.rowLimit,
+        });
+        return asJsonContent(result);
+      },
+    );
+
+    // ── Free Google Autocomplete / Alphabet Soup Tool ───────────────────────
+
+    this.server.tool(
+      "google_autocomplete_expand",
+      "Expand a seed keyword using Google's real-time Autocomplete / Suggest engine (100% free with infinite usage). Supports 'alphabet' soup expansion (a-z), 'questions' (how to, why, can), 'comparisons' (vs, alternative), 'commercial', or 'all' to discover fresh, zero-competition search queries.",
+      {
+        query: z.string().describe("Seed keyword or topic to expand (e.g. 'crm for startups', 'espresso machine')."),
+        strategy: z
+          .enum(["all", "alphabet", "questions", "comparisons", "commercial", "standard"])
+          .optional()
+          .describe("Expansion strategy: 'all' (default), 'alphabet' (a-z modifiers), 'questions', 'comparisons', 'commercial', or 'standard'."),
+        country: z.string().optional().describe("Two-letter country code (default: 'us')."),
+        language: z.string().optional().describe("Two-letter language code (default: 'en')."),
+        maxResults: z.number().int().optional().describe("Maximum unique suggestions to return (default: 100)."),
+      },
+      async (args) => {
+        const result = await expandAutocomplete({
+          query: args.query,
+          strategy: args.strategy,
+          country: args.country,
+          language: args.language,
+          maxResults: args.maxResults,
+        });
+        return asJsonContent(result);
+      },
+    );
+
+    // ── Market Gap & Opportunity Finders ────────────────────────────────────
+
+    this.server.tool(
+      "find_reddit_forum_content_gaps",
+      "Scan keywords to discover content gaps on Google where Reddit, Quora, or discussion forums rank in positions 1 to 3 (or top 5). Since Google prioritizes user discussions when high-quality editorial guides are missing, these represent the highest-probability, easiest ranking opportunities.",
+      {
+        keywords: z
+          .array(z.string())
+          .min(1)
+          .describe("List of keywords to scan for forum content gaps (e.g. ['best crm for pre-seed', 'how to hire first engineer'])."),
+        country: z.string().optional().describe("Two-letter country code (default 'us')."),
+        language: z.string().optional().describe("Two-letter language code (default 'en')."),
+        maxPosition: z
+          .number()
+          .int()
+          .min(1)
+          .max(10)
+          .optional()
+          .describe("Maximum ranking position for forum to qualify as a gap (default: 5, use 3 for high-priority)."),
+        provider: z.enum(["auto", "serpapi", "serper"]).optional().describe("SERP provider strategy (default: 'auto')."),
+        serpApiKey: z.string().optional().describe("Optional SerpApi key override."),
+        serperApiKey: z.string().optional().describe("Optional Serper.dev key override."),
+      },
+      async (args) => {
+        const serpConfig = this.getSerpConfig(args.serpApiKey, args.serperApiKey);
+        const result = await findRedditForumContentGaps(
+          args.keywords,
+          {
+            country: args.country,
+            language: args.language,
+            provider: args.provider,
+            serpApiKey: serpConfig.serpApiKey,
+            serperApiKey: serpConfig.serperApiKey,
+          },
+          serpConfig,
+          args.maxPosition ?? 5,
+        );
+        return asJsonContent(result);
+      },
+    );
+
+    this.server.tool(
+      "get_people_also_ask_tree",
+      "Extract the full 'People Also Ask' (PAA) question tree from Google search results. Categorizes questions by user search intent (How-To, Definitions, Pricing/Costs, Comparisons), and generates ready-to-use JSON-LD FAQPage schema and recommended H2/H3 sub-headings.",
+      {
+        query: z.string().describe("Search query to extract PAA questions for (e.g. 'best ergonomic office chair')."),
+        country: z.string().optional().describe("Two-letter country code (default 'us')."),
+        language: z.string().optional().describe("Two-letter language code (default 'en')."),
+        provider: z.enum(["auto", "serpapi", "serper"]).optional().describe("SERP provider (default: 'auto')."),
+        serpApiKey: z.string().optional().describe("Optional SerpApi key override."),
+        serperApiKey: z.string().optional().describe("Optional Serper.dev key override."),
+      },
+      async (args) => {
+        const serpConfig = this.getSerpConfig(args.serpApiKey, args.serperApiKey);
+        const result = await getPeopleAlsoAskTree(
+          {
+            query: args.query,
+            country: args.country,
+            language: args.language,
+            provider: args.provider,
+            serpApiKey: serpConfig.serpApiKey,
+            serperApiKey: serpConfig.serperApiKey,
+          },
+          serpConfig,
+        );
+        return asJsonContent(result);
+      },
+    );
+
+    this.server.tool(
+      "detect_serp_freshness_gaps",
+      "Detect outdated content and freshness gaps in Google search results. Analyzes competitor publication dates to identify keywords where top-ranking pages are 2+ years old (<= 2023), signaling an immediate opportunity to outrank them with a freshly updated current-year guide.",
+      {
+        keywords: z
+          .array(z.string())
+          .min(1)
+          .describe("List of keywords to evaluate for freshness gaps (e.g. ['best react state management', 'seo trends'])."),
+        country: z.string().optional().describe("Two-letter country code (default 'us')."),
+        language: z.string().optional().describe("Two-letter language code (default 'en')."),
+        provider: z.enum(["auto", "serpapi", "serper"]).optional().describe("SERP provider (default: 'auto')."),
+        serpApiKey: z.string().optional().describe("Optional SerpApi key override."),
+        serperApiKey: z.string().optional().describe("Optional Serper.dev key override."),
+      },
+      async (args) => {
+        const serpConfig = this.getSerpConfig(args.serpApiKey, args.serperApiKey);
+        const result = await detectSerpFreshnessGaps(
+          args.keywords,
+          {
+            country: args.country,
+            language: args.language,
+            provider: args.provider,
+            serpApiKey: serpConfig.serpApiKey,
+            serperApiKey: serpConfig.serperApiKey,
+          },
+          serpConfig,
+        );
+        return asJsonContent(result);
+      },
+    );
+
+    this.server.tool(
+      "find_high_cpc_low_kd_keywords",
+      "Find 'Golden Ratio' commercial opportunities: keywords that have high advertiser CPC bids and search volume, but low SEO Keyword Difficulty (KD <= 45). Calculates a Golden Ratio Opportunity Index = (Volume * CPC) / (KD + 1) to prioritize elite high-ROI money keywords.",
+      {
+        keywords: z
+          .array(z.string())
+          .min(1)
+          .describe("Keywords to evaluate (e.g. ['best enterprise crm', 'cloud security posture management'])."),
+        customerId: z
+          .string()
+          .optional()
+          .describe("Google Ads customer ID to automatically pull live CPC and search volume data."),
+        minSearchVolume: z.number().int().optional().describe("Minimum monthly search volume (default: 200)."),
+        minCpc: z.number().optional().describe("Minimum top-of-page CPC bid in USD (default: $2.00)."),
+        maxKd: z.number().int().optional().describe("Maximum Keyword Difficulty score (default: 45)."),
+        country: z.string().optional().describe("Two-letter country code (default 'us')."),
+        language: z.string().optional().describe("Two-letter language code (default 'en')."),
+        provider: z.enum(["auto", "serpapi", "serper"]).optional().describe("SERP provider (default: 'auto')."),
+        developerToken: z.string().optional().describe("Optional Google Ads developer token override."),
+        loginCustomerId: z.string().optional().describe("Optional Google Ads login customer ID."),
+        serpApiKey: z.string().optional().describe("Optional SerpApi key override."),
+        serperApiKey: z.string().optional().describe("Optional Serper.dev key override."),
+      },
+      async (args) => {
+        const serpConfig = this.getSerpConfig(args.serpApiKey, args.serperApiKey);
+        let metricInputs: Array<{
+          keyword: string;
+          avgMonthlySearches: number;
+          highTopOfPageBid?: number | string;
+        }> = [];
+
+        // If customerId is provided, attempt to fetch real Google Ads metrics
+        if (args.customerId) {
+          try {
+            const token = await this.accessToken();
+            const adsConfig = this.getGoogleAdsConfig(
+              args.developerToken,
+              args.loginCustomerId,
+            );
+            if (adsConfig.developerToken) {
+              const adsData = await getKeywordHistoricalMetrics(
+                {
+                  token,
+                  developerToken: adsConfig.developerToken,
+                  loginCustomerId: adsConfig.loginCustomerId,
+                  apiVersion: adsConfig.apiVersion,
+                },
+                {
+                  customerId: args.customerId,
+                  keywords: args.keywords,
+                  language: args.language,
+                },
+              );
+              if (Array.isArray(adsData.keywords)) {
+                metricInputs = adsData.keywords.map((m) => ({
+                  keyword: m.keyword,
+                  avgMonthlySearches: m.avgMonthlySearches,
+                  highTopOfPageBid: m.highTopOfPageBid,
+                }));
+              }
+            }
+          } catch {
+            // Fall back to baseline if Google Ads call fails or is unconfigured
+          }
+        }
+
+        // If no Ads metrics fetched, initialize baseline for each keyword
+        if (metricInputs.length === 0) {
+          metricInputs = args.keywords.map((k) => ({
+            keyword: k,
+            avgMonthlySearches: 500,
+            highTopOfPageBid: "$5.00",
+          }));
+        }
+
+        const result = await findHighCpcLowKdKeywords(
+          metricInputs,
+          {
+            country: args.country,
+            language: args.language,
+            provider: args.provider,
+            serpApiKey: serpConfig.serpApiKey,
+            serperApiKey: serpConfig.serperApiKey,
+          },
+          serpConfig,
+          args.minSearchVolume ?? 200,
+          args.minCpc ?? 2.0,
+          args.maxKd ?? 45,
+        );
+
+        return asJsonContent(result);
+      },
+    );
+  }
+
+  private getSerpConfig(
+    serpApiKeyArg?: string,
+    serperApiKeyArg?: string,
+  ) {
+    const serpApiKey =
+      cleanSecret(serpApiKeyArg || this.env.SERPAPI_API_KEY) || undefined;
+    const serperApiKey =
+      cleanSecret(serperApiKeyArg || this.env.SERPER_API_KEY) || undefined;
+    return { serpApiKey, serperApiKey };
   }
 
   private getGoogleAdsConfig(
