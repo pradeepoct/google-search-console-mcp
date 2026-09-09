@@ -22,6 +22,13 @@ Once deployed, you get a private MCP endpoint that exposes 23 tools to your AI a
 - `ga4_run_report` — query GA4 metrics (users, sessions, pageviews, conversions, revenue) grouped by dimensions
 - `ga4_run_realtime_report` — query real-time activity for the last 30 minutes
 
+### Microsoft Clarity (UX & Behavioral Insights)
+- `clarity_list_projects` — list all configured Microsoft Clarity projects and aliases (`aiskyla`, `openrees`, `calorieinsight`, etc.)
+- `clarity_get_live_insights` — fetch live traffic, bot sessions, and user behavior metrics (Rage Clicks, Dead Clicks, Excessive Scrolling, Quick Backs) across Device, URL, Browser, OS, Country, Source, Medium, Campaign, and Channel
+- `clarity_get_ux_friction_summary` — analyze user friction, compute a 0–100 Friction Score, and rank top problem URLs and devices
+- `clarity_save_project` — dynamically save or update additional Clarity project API tokens into Cloudflare KV via chat
+
+
 ### Google Ads Keyword Planner (Search Volume & Traffic)
 - `google_ads_list_accessible_customers` — list accessible Google Ads customer IDs
 - `google_ads_get_keyword_traffic` — check exact search volume traffic, 12-month monthly historical breakdown, competition index (0-100), and top-of-page CPC bid estimates for target keywords

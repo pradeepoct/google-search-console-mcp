@@ -51,6 +51,14 @@ import {
   detectSerpFreshnessGaps,
   findHighCpcLowKdKeywords,
 } from "./market_gaps";
+import {
+  fetchClarityLiveInsights,
+  listAllClarityProjects,
+  resolveClarityToken,
+  saveProjectTokenToKV,
+  deleteProjectTokenFromKV,
+  summarizeUxFriction,
+} from "./clarity";
 
 interface Env {
   // OAuth Client (operator's Google project)
@@ -65,6 +73,10 @@ interface Env {
   // SERP & AI Overview API keys (optional; operator defaults)
   SERPAPI_API_KEY?: string;
   SERPER_API_KEY?: string;
+
+  // Microsoft Clarity API (optional operator defaults / multi-project JSON map)
+  CLARITY_API_TOKEN?: string;
+  CLARITY_PROJECT_TOKENS?: string;
 
   // Connector access gate (operator-set; users paste this in the login UI)
   MCP_BEARER_TOKEN: string;
@@ -1186,6 +1198,172 @@ export class GSCMCP extends McpAgent<Env, unknown, GrantProps> {
         );
 
         return asJsonContent(result);
+      },
+    );
+
+    // ── Microsoft Clarity Live Insights & Multi-Project Tools ───────────────
+
+    const clarityDimensionSchema = z.enum([
+      "Browser",
+      "Device",
+      "Country",
+      "OS",
+      "Source",
+      "Medium",
+      "Campaign",
+      "Channel",
+      "URL",
+    ]);
+
+    this.server.tool(
+      "clarity_list_projects",
+      "List all configured Microsoft Clarity project aliases (e.g. aiskyla, openrees, calorieinsight) and KV-stored projects. Use this first to see which websites have Clarity tracking available without exposing raw tokens.",
+      {},
+      async () => {
+        const info = await listAllClarityProjects(
+          this.env.CLARITY_PROJECT_TOKENS,
+          this.env.CLARITY_API_TOKEN,
+          this.env.OAUTH_KV,
+        );
+        return asJsonContent({
+          projects: info.allProjects,
+          configuredInEnv: info.envProjects,
+          savedInKv: info.kvProjects,
+          hasDefaultToken: info.hasDefaultToken,
+          help: "To query a project, pass its name to 'project'. You can also pass 'apiToken' directly for unlisted projects or use 'clarity_save_project' to add more.",
+        });
+      },
+    );
+
+    this.server.tool(
+      "clarity_get_live_insights",
+      "Retrieve live dashboard metrics, traffic, and behavioral interaction signals (Rage Clicks, Dead Clicks, Excessive Scrolling, Quick Backs) from Microsoft Clarity. Supports multi-project token resolution. NOTE: Microsoft Clarity enforces a strict limit of 10 requests per project per day.",
+      {
+        project: z
+          .string()
+          .optional()
+          .describe("Project name or domain alias (e.g. 'aiskyla', 'openrees', 'calorieinsight'). Use clarity_list_projects to view aliases."),
+        apiToken: z
+          .string()
+          .optional()
+          .describe("Optional direct Clarity API token override for this request."),
+        numOfDays: z
+          .enum(["1", "2", "3"])
+          .default("1")
+          .describe("Timeframe: '1' = last 24h, '2' = last 48h, '3' = last 72h (default: '1')."),
+        dimension1: clarityDimensionSchema
+          .optional()
+          .describe("Primary breakdown dimension (e.g. 'Device', 'URL', 'Source', 'Country')."),
+        dimension2: clarityDimensionSchema
+          .optional()
+          .describe("Secondary breakdown dimension."),
+        dimension3: clarityDimensionSchema
+          .optional()
+          .describe("Tertiary breakdown dimension."),
+        metricFilter: z
+          .string()
+          .optional()
+          .describe("Optional filter by metric name (e.g. 'Traffic', 'Rage Click Count', 'Dead Click Count', 'Scroll Depth')."),
+      },
+      async (args) => {
+        const { token, resolvedProject, source } = await resolveClarityToken(
+          args.project,
+          args.apiToken,
+          this.env.CLARITY_PROJECT_TOKENS,
+          this.env.CLARITY_API_TOKEN,
+          this.env.OAUTH_KV,
+        );
+
+        const data = await fetchClarityLiveInsights(token, {
+          numOfDays: Number(args.numOfDays) as 1 | 2 | 3,
+          dimension1: args.dimension1,
+          dimension2: args.dimension2,
+          dimension3: args.dimension3,
+        });
+
+        let filtered = data;
+        if (args.metricFilter) {
+          const filterLower = args.metricFilter.toLowerCase();
+          filtered = data.filter((m) =>
+            m.metricName.toLowerCase().includes(filterLower),
+          );
+        }
+
+        return asJsonContent({
+          project: resolvedProject,
+          resolvedFrom: source,
+          numOfDays: args.numOfDays,
+          dimensions: [args.dimension1, args.dimension2, args.dimension3].filter(Boolean),
+          metricCount: filtered.length,
+          metrics: filtered,
+        });
+      },
+    );
+
+    this.server.tool(
+      "clarity_get_ux_friction_summary",
+      "Analyze user frustration and UX friction on a website using Microsoft Clarity live data. Computes a Friction Score (0-100), summarizes Rage Clicks, Dead Clicks, Excessive Scrolling, and Quick Backs, and pinpoints top problem dimensions/URLs.",
+      {
+        project: z
+          .string()
+          .optional()
+          .describe("Project name or domain alias (e.g. 'aiskyla', 'openrees', 'calorieinsight')."),
+        apiToken: z
+          .string()
+          .optional()
+          .describe("Optional direct Clarity API token override."),
+        numOfDays: z
+          .enum(["1", "2", "3"])
+          .default("1")
+          .describe("Timeframe: '1' = last 24h, '2' = last 48h, '3' = last 72h (default: '1')."),
+        dimension: clarityDimensionSchema
+          .default("URL")
+          .describe("Dimension to pinpoint friction areas by (default: 'URL', or 'Device', 'Browser')."),
+      },
+      async (args) => {
+        const { token, resolvedProject, source } = await resolveClarityToken(
+          args.project,
+          args.apiToken,
+          this.env.CLARITY_PROJECT_TOKENS,
+          this.env.CLARITY_API_TOKEN,
+          this.env.OAUTH_KV,
+        );
+
+        const data = await fetchClarityLiveInsights(token, {
+          numOfDays: Number(args.numOfDays) as 1 | 2 | 3,
+          dimension1: args.dimension,
+        });
+
+        const frictionAnalysis = summarizeUxFriction(data);
+
+        return asJsonContent({
+          project: resolvedProject,
+          resolvedFrom: source,
+          numOfDays: args.numOfDays,
+          dimension: args.dimension,
+          ...frictionAnalysis,
+        });
+      },
+    );
+
+    this.server.tool(
+      "clarity_save_project",
+      "Dynamically save or update a Microsoft Clarity project API token in Cloudflare KV. This allows adding new projects on-the-fly without modifying secrets or redeploying.",
+      {
+        projectName: z
+          .string()
+          .describe("Project name or domain identifier (e.g. 'my-new-site' or 'client-site.com')."),
+        apiToken: z
+          .string()
+          .describe("The project JWT API token from Microsoft Clarity Settings -> Data Export."),
+      },
+      async (args) => {
+        await saveProjectTokenToKV(this.env.OAUTH_KV, args.projectName, args.apiToken);
+        return asJsonContent({
+          status: "success",
+          savedProject: args.projectName.toLowerCase().trim(),
+          message: `Clarity API token for '${args.projectName}' successfully stored in Cloudflare KV. You can now query it using project: '${args.projectName}'.`,
+        });
       },
     );
   }
